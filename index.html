@@ -707,18 +707,53 @@
   function normalizeWords(raw) {
     let s = String(raw || '').toLowerCase();
     s = s.replace(/[.,;:!?]/g, ' ');
+
+    // Chrome/Web Speech often returns near-misses for ATC words. These are intentionally forgiving.
     s = s.replace(/\bheading\s+0+(?=\d)/g, 'heading ');
     s = s.replace(/\bh d g\b/g, ' heading ');
     s = s.replace(/\bhdg\b/g, ' heading ');
+    s = s.replace(/\b(add|adding|added|hitting|hedding|bedding|getting|heading)\b/g, ' heading ');
+    s = s.replace(/\bhead in\b/g, ' heading ');
+    s = s.replace(/\bhead\b/g, ' heading ');
+    s = s.replace(/\bflight heading\b/g, ' fly heading ');
+
+    s = s.replace(/\bwrite\b/g, ' right ');
+    s = s.replace(/\bright hand\b/g, ' right ');
+    s = s.replace(/\bright heading\b/g, ' right heading ');
+    s = s.replace(/\blift\b/g, ' left ');
+    s = s.replace(/\bleft hand\b/g, ' left ');
+    s = s.replace(/\bturning\b/g, ' turn ');
+
+    s = s.replace(/\bspeeding\b/g, ' speed ');
+    s = s.replace(/\bseed\b/g, ' speed ');
+    s = s.replace(/\bspeeds\b/g, ' speed ');
+
+    // Airline/callsign normalization. "unit" is the common bad recognition for "United".
     s = s.replace(/\bu a l\b/g, ' ual ');
     s = s.replace(/\byou a l\b/g, ' ual ');
+    s = s.replace(/\byou all\b/g, ' ual ');
+    s = s.replace(/\byou al\b/g, ' ual ');
     s = s.replace(/\bunited(?: airlines?)?\b/g, ' ual ');
+    s = s.replace(/\bunit(?:ed|s)?\b/g, ' ual ');
+    s = s.replace(/\bunite\b/g, ' ual ');
+    s = s.replace(/\buntied\b/g, ' ual ');
+
     s = s.replace(/\ba c a\b/g, ' aca ');
     s = s.replace(/\bair canada\b/g, ' aca ');
+    s = s.replace(/\bare canada\b/g, ' aca ');
+    s = s.replace(/\bcanada air\b/g, ' aca ');
+    s = s.replace(/\baircanada\b/g, ' aca ');
+
     s = s.replace(/\bj z a\b/g, ' jza ');
     s = s.replace(/\bjazz\b/g, ' jza ');
+    s = s.replace(/\bjas\b/g, ' jza ');
+    s = s.replace(/\bjass\b/g, ' jza ');
+
     s = s.replace(/\ba a l\b/g, ' aal ');
     s = s.replace(/\bamerican(?: airlines?)?\b/g, ' aal ');
+    s = s.replace(/\bamerica\b/g, ' aal ');
+    s = s.replace(/\bmerican\b/g, ' aal ');
+
     s = s.replace(/\bnew target\b/g, ' spawn new target ');
     return s.replace(/\s+/g, ' ').trim();
   }
@@ -746,7 +781,7 @@
       if (SMALL_NUMS.has(t)) { current += SMALL_NUMS.get(t); consumed = true; continue; }
       if (TENS.has(t)) { current += TENS.get(t); consumed = true; continue; }
       if (t === 'hundred') { current = (current || 1) * 100; consumed = true; continue; }
-      return consumed ? total + current : null;
+      return null;
     }
     return consumed ? total + current : null;
   }
@@ -766,8 +801,30 @@
   }
 
   function parseNumberByMode(tokens, mode) {
-    const clean = tokens.filter(t => !['to', 'at', 'of', 'degrees'].includes(t));
+    const clean = tokens.filter(t => !['at', 'of', 'degrees'].includes(t));
     if (!clean.length) return null;
+
+    const digitOf = (tok) => {
+      const t = String(tok || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+      if (/^\d$/.test(t)) return t;
+      if (DIGIT_WORDS.has(t)) return DIGIT_WORDS.get(t);
+      return null;
+    };
+
+    // Handles "zero nine zero", "0 9 0", and Chrome's common "to seven zero" for "two seven zero".
+    if (mode === 'heading' || mode === 'speed') {
+      const digitVals = [];
+      let allDigitLike = true;
+      for (const t of clean) {
+        const d = digitOf(t);
+        if (d === null) { allDigitLike = false; break; }
+        digitVals.push(d);
+      }
+      if (allDigitLike && digitVals.length >= 2 && digitVals.length <= 3) {
+        return Number.parseInt(digitVals.join(''), 10);
+      }
+    }
+
     const joined = clean.join(' ');
     const digitMatch = joined.match(/\b\d{1,3}\b/);
     if (digitMatch) return Number.parseInt(digitMatch[0], 10);
@@ -782,18 +839,57 @@
     }
 
     if (mode === 'heading') {
-      if (clean.length >= 3 && DIGIT_WORDS.has(clean[0]) && DIGIT_WORDS.has(clean[1]) && DIGIT_WORDS.has(clean[2])) {
-        return Number.parseInt(DIGIT_WORDS.get(clean[0]) + DIGIT_WORDS.get(clean[1]) + DIGIT_WORDS.get(clean[2]), 10);
+      if (clean.length >= 3 && digitOf(clean[0]) !== null && digitOf(clean[1]) !== null && digitOf(clean[2]) !== null) {
+        return Number.parseInt(digitOf(clean[0]) + digitOf(clean[1]) + digitOf(clean[2]), 10);
       }
-      if (clean.length >= 2 && DIGIT_WORDS.has(clean[0]) && TENS.has(clean[1])) {
-        return Number.parseInt(DIGIT_WORDS.get(clean[0]), 10) * 100 + TENS.get(clean[1]);
+      if (clean.length >= 2 && digitOf(clean[0]) !== null && TENS.has(clean[1])) {
+        return Number.parseInt(digitOf(clean[0]), 10) * 100 + TENS.get(clean[1]);
       }
     }
 
     return parseIntegerWords(clean);
   }
 
-  const COMMAND_WORDS = new Set(['fly','heading','hdg','h','turn','left','right','speed','spd','spawn','delete','remove','clear','pause','resume','stop','new','target','box','practice','maintain','direct','to']);
+  const COMMAND_WORDS = new Set(['fly','heading','hdg','h','add','adding','hedding','head','turn','turning','left','lift','right','write','speed','spd','spawn','delete','remove','clear','pause','resume','stop','new','target','box','practice','maintain','direct','to']);
+
+  const AIRLINE_FUZZY_ALIASES = {
+    UAL: ['ual','united','unit','unite','untied','youal','youall'],
+    ACA: ['aca','aircanada','canada','air','arecanada'],
+    JZA: ['jza','jazz','jas','jass'],
+    AAL: ['aal','american','america','merican']
+  };
+
+  function editDistance(a, b) {
+    a = String(a || ''); b = String(b || '');
+    const dp = Array.from({ length: a.length + 1 }, () => Array(b.length + 1).fill(0));
+    for (let i = 0; i <= a.length; i++) dp[i][0] = i;
+    for (let j = 0; j <= b.length; j++) dp[0][j] = j;
+    for (let i = 1; i <= a.length; i++) {
+      for (let j = 1; j <= b.length; j++) {
+        const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+        dp[i][j] = Math.min(dp[i - 1][j] + 1, dp[i][j - 1] + 1, dp[i - 1][j - 1] + cost);
+      }
+    }
+    return dp[a.length][b.length];
+  }
+
+  function bestFuzzyAirlineForWord(word) {
+    const clean = String(word || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+    if (!clean) return null;
+    const upper = clean.toUpperCase();
+    if (AIRLINES.includes(upper)) return upper;
+
+    let best = { prefix: null, score: Infinity, alias: '' };
+    for (const [prefix, aliases] of Object.entries(AIRLINE_FUZZY_ALIASES)) {
+      for (const alias of aliases) {
+        const d = editDistance(clean, alias);
+        const maxLen = Math.max(clean.length, alias.length);
+        const acceptable = d <= 1 || (maxLen >= 6 && d <= 2) || clean.startsWith(alias) || alias.startsWith(clean);
+        if (acceptable && d < best.score) best = { prefix, score: d, alias };
+      }
+    }
+    return best.prefix;
+  }
 
   function findAircraftByCallsign(token) {
     const clean = String(token || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
@@ -812,7 +908,8 @@
   }
 
   function callsignPrefixFromToken(token) {
-    const t = String(token || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+    const raw = String(token || '');
+    const t = raw.toUpperCase().replace(/[^A-Z0-9]/g, '');
     if (AIRLINES.includes(t)) return { prefix: t, embeddedNumber: '' };
 
     for (const p of AIRLINES) {
@@ -820,6 +917,15 @@
         return { prefix: p, embeddedNumber: t.slice(p.length) };
       }
     }
+
+    // Fuzzy airline match for Web Speech mistakes like "unit 3 4" instead of "United 34".
+    const lettersOnly = raw.toLowerCase().replace(/[^a-z]/g, '');
+    const embeddedDigits = raw.replace(/[^0-9]/g, '');
+    const fuzzyPrefix = bestFuzzyAirlineForWord(lettersOnly || raw);
+    if (fuzzyPrefix) {
+      return { prefix: fuzzyPrefix, embeddedNumber: /^\d{1,4}$/.test(embeddedDigits) ? embeddedDigits : '' };
+    }
+
     return null;
   }
 
@@ -962,7 +1068,7 @@
     const speed = parseNumberAfter(tokens, ['speed','spd'], 'speed');
     if (speed !== null) { applySpeed(speed, ac); return; }
 
-    let heading = parseNumberAfter(tokens, ['heading','hdg','h'], 'heading');
+    let heading = parseNumberAfter(tokens, ['heading','hdg','h','adding','add','hedding','head','hitting'], 'heading');
     if (heading === null && (joined.includes('left') || joined.includes('right') || joined.includes('fly'))) {
       heading = parseNumberByMode(tokens.filter(t => !['turn','left','right','fly','heading','hdg','h','to'].includes(t)), 'heading');
     }
