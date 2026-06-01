@@ -793,26 +793,130 @@
     return parseIntegerWords(clean);
   }
 
+  const COMMAND_WORDS = new Set(['fly','heading','hdg','h','turn','left','right','speed','spd','spawn','delete','remove','clear','pause','resume','stop','new','target','box','practice','maintain','direct','to']);
+
   function findAircraftByCallsign(token) {
-    const clean = String(token || '').toUpperCase().replace(/\s+/g, '');
-    return aircraft.find(a => a.callsign === clean) || aircraft.find(a => a.callsign.endsWith(clean));
+    const clean = String(token || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+    if (!clean) return null;
+
+    const exact = aircraft.find(a => a.callsign === clean);
+    if (exact) return exact;
+
+    // If the user says only the number, use it only when it is unique on the scope.
+    if (/^\d{1,4}$/.test(clean)) {
+      const suffixMatches = aircraft.filter(a => a.callsign.endsWith(clean));
+      return suffixMatches.length === 1 ? suffixMatches[0] : null;
+    }
+
+    return null;
   }
 
-  function extractCallsign(tokens) {
-    for (let i = 0; i < tokens.length; i++) {
-      const prefix = tokens[i].toUpperCase();
-      if (!AIRLINES.includes(prefix)) continue;
-      for (let len = 1; len <= 3 && i + len < tokens.length; len++) {
-        const numberTokens = tokens.slice(i + 1, i + 1 + len);
-        if (numberTokens.some(t => ['fly','heading','turn','left','right','speed','spawn','delete','remove','clear'].includes(t))) break;
-        const n = parseIntegerWords(numberTokens);
-        if (n !== null && n >= 0 && n <= 9999) {
-          const callsign = prefix + String(n).padStart(numberTokens.length >= 2 && n < 10 ? 2 : 0, '0');
-          return { callsign, start: i, end: i + 1 + len };
-        }
+  function callsignPrefixFromToken(token) {
+    const t = String(token || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+    if (AIRLINES.includes(t)) return { prefix: t, embeddedNumber: '' };
+
+    for (const p of AIRLINES) {
+      if (t.startsWith(p) && /^\d{1,4}$/.test(t.slice(p.length))) {
+        return { prefix: p, embeddedNumber: t.slice(p.length) };
       }
     }
     return null;
+  }
+
+  function digitValueFromToken(token) {
+    const t = String(token || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+    if (/^\d$/.test(t)) return t;
+    if (DIGIT_WORDS.has(t)) return String(DIGIT_WORDS.get(t));
+    return null;
+  }
+
+  function isNumberishToken(token) {
+    const t = String(token || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+    return /^\d{1,4}$/.test(t) || DIGIT_WORDS.has(t) || SMALL_NUMS.has(t) || TENS.has(t) || t === 'hundred' || t === 'and';
+  }
+
+  function callsignNumberVariants(numberTokens) {
+    const clean = numberTokens.filter(t => t !== 'and');
+    const variants = [];
+    if (!clean.length) return variants;
+    if (!clean.every(isNumberishToken)) return variants;
+
+    // Web Speech often hears a callsign as separated digits: "United 3 4".
+    // Treat that as UAL34 before trying to treat it as UAL3.
+    let digitString = '';
+    let allDigits = true;
+    for (const t of clean) {
+      const raw = String(t).replace(/[^0-9]/g, '');
+      const digit = raw.length === 1 ? raw : digitValueFromToken(t);
+      if (digit !== null && digit !== '') digitString += digit;
+      else { allDigits = false; break; }
+    }
+    if (allDigits && digitString.length) variants.push(digitString.slice(0, 4));
+
+    // Also support natural numbers: "thirty four", "one twenty three", etc.
+    const asNumber = parseIntegerWords(clean);
+    if (asNumber !== null && asNumber >= 0 && asNumber <= 9999) {
+      variants.push(String(asNumber));
+      if (asNumber < 10 && clean.length > 1) variants.push(String(asNumber).padStart(clean.length, '0'));
+    }
+
+    return [...new Set(variants.filter(v => /^\d{1,4}$/.test(v)))];
+  }
+
+  function extractCallsign(tokens) {
+    const possible = [];
+
+    for (let i = 0; i < tokens.length; i++) {
+      const prefixInfo = callsignPrefixFromToken(tokens[i]);
+      if (!prefixInfo) continue;
+      const { prefix, embeddedNumber } = prefixInfo;
+
+      if (embeddedNumber) {
+        possible.push({ callsign: prefix + embeddedNumber, start: i, end: i + 1, tokenLen: 1, exact: aircraft.some(a => a.callsign === prefix + embeddedNumber) });
+        continue;
+      }
+
+      let maxLen = 0;
+      for (let len = 1; len <= 4 && i + len < tokens.length; len++) {
+        const next = tokens[i + len];
+        if (COMMAND_WORDS.has(next)) break;
+        if (!isNumberishToken(next)) break;
+        maxLen = len;
+      }
+
+      // Try the longest number phrase first. This fixes "United 3 4" becoming UAL3.
+      for (let len = maxLen; len >= 1; len--) {
+        const numberTokens = tokens.slice(i + 1, i + 1 + len);
+        for (const numberText of callsignNumberVariants(numberTokens)) {
+          const callsign = prefix + numberText;
+          possible.push({
+            callsign,
+            start: i,
+            end: i + 1 + len,
+            tokenLen: len,
+            exact: aircraft.some(a => a.callsign === callsign)
+          });
+        }
+      }
+
+      // If the user only says "United fly heading 270" and there is exactly one UAL aircraft, use it.
+      if (maxLen === 0) {
+        const prefixMatches = aircraft.filter(a => a.callsign.startsWith(prefix));
+        if (prefixMatches.length === 1) {
+          possible.push({ callsign: prefixMatches[0].callsign, start: i, end: i + 1, tokenLen: 0, exact: true });
+        }
+      }
+    }
+
+    if (!possible.length) return null;
+
+    possible.sort((a, b) => {
+      if (a.exact !== b.exact) return a.exact ? -1 : 1;
+      if (a.tokenLen !== b.tokenLen) return b.tokenLen - a.tokenLen;
+      return a.start - b.start;
+    });
+
+    return possible[0];
   }
 
   function parseCommand(raw, source = 'typed') {
@@ -840,6 +944,11 @@
       if (ac) tokens.shift(); else ac = selectedAircraft();
     }
 
+    if (source === 'voice' && extracted) {
+      const matchedText = ac ? ac.callsign : extracted.callsign;
+      setHeard(`${original}  â  matched ${matchedText}`, ac ? 'final' : 'error');
+    }
+
     if (!ac) {
       setStatus('No matching aircraft. Click a target or start with a callsign, e.g. ACA12 / United 34 / Jazz 56.');
       return;
@@ -861,7 +970,7 @@
 
     if (/^\d{1,3}$/.test(joined)) { applyHeading(joined, ac, 'direct'); return; }
 
-    setStatus('Command not recognized. Try: ACA12 fly heading 270, UAL34 turn right heading 090, JZA56 turn left 180, or AAL45 speed 410.');
+    setStatus('Command not recognized. Try: ACA12 fly heading 270, United 3 4 turn right heading 090, Jazz 56 turn left 180, or AAL45 speed 410.');
   }
 
   function stepTurn(ac, dt) {
