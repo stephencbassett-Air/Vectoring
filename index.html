@@ -22,27 +22,29 @@
 
     html, body {
       margin: 0;
-      height: 100%;
+      min-height: 100%;
       background: var(--bg);
       color: var(--text);
       font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      overflow: hidden;
+      overflow-x: hidden;
+      overflow-y: auto;
     }
 
     button, input, select { font: inherit; }
 
     .app {
-      height: 100dvh;
+      min-height: 100dvh;
       width: 100vw;
       display: flex;
       flex-direction: column;
-      overflow: hidden;
+      overflow: visible;
       background: var(--bg);
     }
 
     .scope-fit {
       position: relative;
-      flex: 1 1 auto;
+      height: clamp(520px, calc(100dvh - 104px), 920px);
+      flex: 0 0 auto;
       min-height: 0;
       overflow: hidden;
       display: flex;
@@ -195,12 +197,54 @@
     .control-deck {
       flex: 0 0 auto;
       display: grid;
-      grid-template-columns: minmax(270px, .95fr) minmax(300px, 1.1fr) minmax(270px, .9fr) minmax(260px, .9fr);
-      gap: 10px;
-      padding: 10px;
+      grid-template-columns: repeat(4, minmax(230px, 1fr));
+      gap: 8px;
+      padding: 8px;
       background: linear-gradient(180deg, #0b111b 0%, #070b12 100%);
-      max-height: 34dvh;
-      overflow: auto;
+      max-height: none;
+      overflow: visible;
+    }
+
+    .priority-card {
+      grid-column: 1 / -1;
+      min-height: 88px;
+      display: grid;
+      grid-template-columns: auto minmax(290px, 1fr) minmax(220px, .65fr);
+      gap: 10px;
+      align-items: center;
+      padding: 8px 10px;
+    }
+
+    .priority-actions {
+      display: flex;
+      gap: 8px;
+      align-items: stretch;
+      flex-wrap: wrap;
+    }
+
+    .priority-actions button {
+      padding: 12px 14px;
+      min-height: 46px;
+    }
+
+    #spawnOneBtn {
+      font-weight: 800;
+      font-size: 15px;
+    }
+
+    .priority-heard label {
+      margin: 0 0 4px;
+    }
+
+    .priority-card .heard {
+      min-height: 48px;
+      font-size: 14px;
+    }
+
+    .priority-status {
+      color: var(--muted);
+      line-height: 1.35;
+      font-size: 12px;
     }
 
     .card {
@@ -337,14 +381,17 @@
     .hint { color: var(--muted); font-size: 12px; line-height: 1.35; }
 
     @media (max-width: 1180px) {
-      .control-deck { grid-template-columns: 1fr 1fr; max-height: 40dvh; }
+      .scope-fit { height: clamp(500px, calc(100dvh - 118px), 920px); }
+      .control-deck { grid-template-columns: 1fr 1fr; }
+      .priority-card { grid-template-columns: auto minmax(260px, 1fr); }
+      .priority-status { grid-column: 1 / -1; }
     }
 
     @media (max-width: 760px) {
-      html, body { overflow: auto; }
-      .app { height: auto; min-height: 100dvh; }
-      .scope-fit { height: 56dvh; min-height: 340px; flex: 0 0 auto; }
-      .control-deck { grid-template-columns: 1fr; max-height: none; overflow: visible; }
+      .scope-fit { height: clamp(360px, calc(100dvh - 150px), 720px); }
+      .control-deck { grid-template-columns: 1fr; }
+      .priority-card { grid-template-columns: 1fr; align-items: stretch; }
+      .priority-actions button { flex: 1 1 auto; }
     }
   </style>
 </head>
@@ -368,26 +415,33 @@
     </main>
 
     <section class="control-deck">
-      <div class="card">
-        <h2>Traffic</h2>
-        <div class="row">
+      <div class="card priority-card">
+        <div class="priority-actions">
           <button class="primary" id="spawnOneBtn">Spawn New Target</button>
+          <button id="holdTalkBtn">Hold to Talk / Right Shift</button>
+        </div>
+        <div class="priority-heard">
+          <label>Command heard</label>
+          <div class="heard" id="heardBox">Nothing heard yet.</div>
+        </div>
+        <div class="priority-status" id="statusBox">Ready. Spawn a target or hold Right Shift to talk. Movement is 2x.</div>
+      </div>
+
+      <div class="card">
+        <h2>Traffic Extras</h2>
+        <div class="row">
           <button class="good" id="spawnBoxBtn">Spawn Practice Box</button>
           <button id="pauseBtn">Pause</button>
           <button class="danger" id="clearBtn">Clear</button>
         </div>
-        <div class="status" id="statusBox">Ready. Spawn a target or use voice. Movement is 2x.</div>
       </div>
 
       <div class="card">
         <h2>Voice Control</h2>
         <div class="row">
           <button class="good" id="voiceToggleBtn">Start Voice Control</button>
-          <button id="holdTalkBtn">Hold to Talk</button>
         </div>
-        <label style="margin-top:8px;">Command heard</label>
-        <div class="heard" id="heardBox">Nothing heard yet.</div>
-        <div class="status" id="voiceStatus">Voice is off. Works best from GitHub Pages in Chrome/Edge with mic permission enabled.</div>
+        <div class="status" id="voiceStatus">Voice is off. Hold Right Shift or the Hold to Talk button. Works best from GitHub Pages in Chrome/Edge with mic permission enabled.</div>
       </div>
 
       <div class="card">
@@ -962,7 +1016,7 @@
 
     rec.onstart = () => {
       restarting = false;
-      setVoiceStatus(holdMode ? 'Listening while held...' : 'Voice control listening. Speak a command.');
+      setVoiceStatus(holdMode ? 'Listening while held. Release Right Shift/button to stop.' : 'Voice control listening. Speak a command.');
       voiceToggleBtn.classList.toggle('voice-on', voiceContinuous);
     };
 
@@ -1047,23 +1101,50 @@
     else { holdMode = false; startVoice(true); }
   });
 
-  holdTalkBtn.addEventListener('pointerdown', e => {
-    e.preventDefault();
+  let rightShiftPTTActive = false;
+
+  function beginPushToTalk() {
+    if (voiceContinuous || holdMode) return;
     holdMode = true;
     startVoice(false);
+  }
+
+  function endPushToTalk() {
+    if (!holdMode) return;
+    stopVoice();
+  }
+
+  holdTalkBtn.addEventListener('pointerdown', e => {
+    e.preventDefault();
+    beginPushToTalk();
   });
   const releaseHold = e => {
     if (!holdMode) return;
     e.preventDefault();
-    stopVoice();
+    endPushToTalk();
   };
   holdTalkBtn.addEventListener('pointerup', releaseHold);
   holdTalkBtn.addEventListener('pointercancel', releaseHold);
   holdTalkBtn.addEventListener('pointerleave', releaseHold);
 
+  document.addEventListener('keydown', e => {
+    if (e.code !== 'ShiftRight' || e.repeat) return;
+    e.preventDefault();
+    rightShiftPTTActive = true;
+    beginPushToTalk();
+  });
+
+  document.addEventListener('keyup', e => {
+    if (e.code !== 'ShiftRight') return;
+    e.preventDefault();
+    if (!rightShiftPTTActive) return;
+    rightShiftPTTActive = false;
+    endPushToTalk();
+  });
+
   createAircraft({ x: 55, y: MAP_H * .42, heading: 80, speed: 390, callsign: 'ACA12' });
   createAircraft({ x: MAP_W - 60, y: MAP_H * .62, heading: 285, speed: 430, callsign: 'UAL34' });
-  setStatus('Starter traffic loaded. Voice control active when started. Spawns are random on-map. Movement is 2x.');
+  setStatus('Starter traffic loaded. Hold Right Shift for push-to-talk. Spawns are random on-map. Movement is 2x.');
   renderAll();
   requestAnimationFrame(frame);
 })();
